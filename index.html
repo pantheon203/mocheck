@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>사이트별 정산 현황</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: '맑은 고딕', Malgun Gothic, sans-serif; font-size: 13px; background: #f5f5f5; padding: 20px; }
+  .container { background: #fff; padding: 16px; max-width: 1200px; margin: 0 auto; box-shadow: 0 1px 4px rgba(0,0,0,0.1); }
+  .title-row { color: #c00; font-weight: bold; font-size: 13px; margin-bottom: 8px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { border: 1px solid #ccc; padding: 5px 8px; text-align: center; white-space: nowrap; }
+  th { background: #e8f0e8; font-weight: bold; font-size: 13px; }
+  td:first-child { text-align: center; background: #fff; }
+  tr:hover td { background: #f9f9f9; }
+  .neg { color: #c00; }
+  .pos { color: #000; }
+  .subtotal { background: #e8f0e8 !important; font-weight: bold; }
+  .subtotal td { background: #e8f0e8 !important; }
+  .total-row td { background: #d0d0d0 !important; font-weight: bold; }
+  .section-label { font-size: 11px; color: #555; }
+  .last-update { font-size: 12px; color: #555; margin-bottom: 6px; }
+  .loading { text-align: center; padding: 40px; color: #888; font-size: 16px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="title-row" id="lastUpdate">로딩 중...</div>
+  <div id="tableArea" class="loading">데이터를 불러오는 중입니다...</div>
+</div>
+
+<script>
+// ── 설정 ──────────────────────────────────────────────
+const DATA_URL = './data.json'; // 데이터 파일 경로
+const SITES = ['아바', '씨오디', '위너', 'DR.BET'];
+
+// ── 행 정의 ────────────────────────────────────────────
+const ROWS = [
+  { key: 'sbo',           label: 'SBO',                    group: 'sports' },
+  { key: 'maxbet',        label: '맥스벳',                  group: 'sports' },
+  { key: 'sb888',         label: 'SB888',                  group: 'sports' },
+  { key: 'sb888_sim',     label: 'SB888(심리스)',            group: 'sports' },
+  { key: 'sports',        label: '스포츠',                  group: 'sports' },
+  { key: 'bti',           label: 'BTI',                    group: 'sports' },
+  { key: 'hidden_sports', label: '히든버튼 스포츠',          group: 'sports' },
+  { key: 'esports',       label: 'E스포츠',                 group: 'sports' },
+  { key: 'beteast',       label: '벳이스트',                group: 'sports' },
+  { key: 'bet10',         label: '10벳',                   group: 'sports' },
+  { key: 'sports_total',  label: '*스포츠 총 승패',          subtotal: true },
+  { key: 'casino_evo',    label: '[카지노] 에볼루션',        group: 'casino' },
+  { key: 'casino_prag',   label: '[카지노] 프레그마틱카지노', group: 'casino' },
+  { key: 'casino_xpg',    label: '[카지노] XPG',            group: 'casino' },
+  { key: 'casino_etc',    label: '[카지노] 에볼루션/프레그/XPG 제외', group: 'casino' },
+  { key: 'slot_prag',     label: '[슬롯] 프레그매틱',        group: 'casino' },
+  { key: 'slot_etc',      label: '[슬롯] 프레그매틱 제외',   group: 'casino' },
+  { key: 'mini_sprite',   label: '[미니게임] 스프라이브',    group: 'casino' },
+  { key: 'mini_evo',      label: '[미니게임] EVO파워볼',     group: 'casino' },
+  { key: 'p2p_holdem',    label: '[P2P] 히든홀덤',          group: 'casino' },
+  { key: 'minigame',      label: '미니게임',                group: 'casino' },
+  { key: 'casino_total',  label: '*카지노/슬롯/기타 총 승패', subtotal: true },
+  { key: 'rolling_bonus', label: '롤링 보너스',             group: 'bonus' },
+  { key: 'first_bonus',   label: '첫충전 보너스',           group: 'bonus' },
+  { key: 'loss_bonus',    label: '낙점금',                  group: 'bonus' },
+  { key: 'coupon',        label: '쿠폰 지급액',             group: 'bonus' },
+  { key: 'mini_settle',   label: '미니게임 정산금',          group: 'bonus' },
+  { key: 'virtual_fee',   label: '가상계좌 수수료:',         group: 'bonus' },
+  { key: 'casino_roll_total', label: '* 카지노 롤링 총 합계', subtotal: true },
+  { key: 'site_total',    label: '사이트별 총 승패',         total: true },
+  { key: 'balance',       label: '보유금액',                group: 'balance' },
+  { key: 'bank',          label: '통장금액',                group: 'balance' },
+  { key: 'manual_bonus',  label: '수기지급 보너스',          group: 'balance' },
+];
+
+function fmt(v) {
+  if (v === undefined || v === null || v === '') return '0';
+  const n = Number(v);
+  if (isNaN(n)) return v;
+  return n.toLocaleString('ko-KR');
+}
+
+function cls(v) {
+  const n = Number(v);
+  return n < 0 ? 'neg' : 'pos';
+}
+
+function renderTable(data) {
+  // 날짜 업데이트
+  const ts = data.timestamp || '';
+  document.getElementById('lastUpdate').textContent = '*' + ts + ' (한국시간)';
+
+  const sites = data.sites || SITES;
+  
+  let html = '<table>';
+  // 헤더
+  html += '<tr><th style="min-width:200px"></th><th>사이트 합계액</th>';
+  sites.forEach(s => { html += '<th>' + s + '</th>'; });
+  html += '</tr>';
+
+  // 데이터 행
+  ROWS.forEach(row => {
+    const rowData = data.rows && data.rows[row.key] ? data.rows[row.key] : {};
+    const total = rowData.total !== undefined ? rowData.total : '';
+    
+    let trClass = '';
+    if (row.subtotal) trClass = 'subtotal';
+    if (row.total) trClass = 'total-row';
+
+    html += '<tr class="' + trClass + '">';
+    html += '<td>' + row.label + '</td>';
+    html += '<td class="' + cls(total) + '">' + fmt(total) + '</td>';
+    
+    sites.forEach(s => {
+      const v = rowData[s] !== undefined ? rowData[s] : '';
+      html += '<td class="' + cls(v) + '">' + fmt(v) + '</td>';
+    });
+    html += '</tr>';
+  });
+
+  html += '</table>';
+  document.getElementById('tableArea').innerHTML = html;
+  document.getElementById('tableArea').className = '';
+}
+
+// 샘플 데이터 (실제 데이터 연동 전까지 사용)
+const sampleData = {
+  timestamp: new Date().toLocaleString('ko-KR', {year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}).replace(/./g,'-').replace(/ /g,'').replace(/-$/,'').replace('오전','').replace('오후','').trim(),
+  sites: ['아바', '씨오디', '위너', 'DR.BET'],
+  rows: {
+    sbo:           { total: 0, '아바': 0, '씨오디': 0, '위너': 0, 'DR.BET': 0 },
+    maxbet:        { total: 0, '아바': 0, '씨오디': 0, '위너': 0, 'DR.BET': 0 },
+    sb888:         { total: 0, '아바': 0, '씨오디': 0, '위너': 0, 'DR.BET': 0 },
+    sb888_sim:     { total: -68190422, '아바': -58265923, '씨오디': -9924499, '위너': 0, 'DR.BET': 0 },
+    sports:        { total: -624000, '아바': 0, '씨오디': 0, '위너': -624000, 'DR.BET': 0 },
+    bti:           { total: 15511825, '아바': 14243782, '씨오디': 1268043, '위너': 0, 'DR.BET': 0 },
+    hidden_sports: { total: 0, '아바': 0, '씨오디': 0, '위너': 0, 'DR.BET': 0 },
+    esports:       { total: -243689, '아바': -243689, '씨오디': 0, '위너': 0, 'DR.BET': 0 },
+    beteast:       { total: 0, '아바': 0, '씨오디': 0, '위너': 0, 'DR.BET': 0 },
+    bet10:         { total: 0, '아바': 0, '씨오디': 0, '위너': 0, 'DR.BET': 0 },
+    sports_total:  { total: -53546286, '아바': -44265830, '씨오디': -8656456, '위너': -624000, 'DR.BET': 0 },
+    casino_evo:    { total: 21615725, '아바': 7659750, '씨오디': 43085000, '위너': 18600, 'DR.BET': -29147625 },
+    casino_prag:   { total: -2991405, '아바': -3637500, '씨오디': 0, '위너': 0, 'DR.BET': 646095 },
+    casino_xpg:    { total: 0, '아바': 0, '씨오디': 0, '위너': 0, 'DR.BET': 0 },
+    casino_etc:    { total: 0, '아바': 0, '씨오디': 0, '위너': 0, 'DR.BET': 0 },
+    slot_prag:     { total: 3509760, '아바': 0, '씨오디': 3372780, '위너': 0, 'DR.BET': 136980 },
+    slot_etc:      { total: 15640, '아바': 15480, '씨오디': 160, '위너': 0, 'DR.BET': 0 },
+    mini_sprite:   { total: 124150, '아바': 0, '씨오디': 0, '위너': 0, 'DR.BET': 124150 },
+    mini_evo:      { total: 499162, '아바': 499162, '씨오디': 0, '위너': 0, 'DR.BET': 0 },
+    p2p_holdem:    { total: 0, '아바': 0, '씨오디': 0, '위너': 0, 'DR.BET': 0 },
+    minigame:      { total: 0, '아바': 0, '씨오디': 0, '위너': 0, 'DR.BET': 0 },
+    casino_total:  { total: 22773032, '아바': 4536892, '씨오디': 46457940, '위너': 18600, 'DR.BET': -28240400 },
+    rolling_bonus: { total: -32985723, '아바': -7923482, '씨오디': -8018801, '위너': -29280, 'DR.BET': -17014160 },
+    first_bonus:   { total: 0, '아바': 0, '씨오디': 0, '위너': 0, 'DR.BET': 0 },
+    loss_bonus:    { total: -3446353, '아바': -3446353, '씨오디': 0, '위너': 0, 'DR.BET': 0 },
+    coupon:        { total: 0, '아바': 0, '씨오디': 0, '위너': 0, 'DR.BET': 0 },
+    mini_settle:   { total: -350905, '아바': -350905, '씨오디': 0, '위너': 0, 'DR.BET': 0 },
+    virtual_fee:   { total: 0, '아바': 0, '씨오디': 0, '위너': 0, 'DR.BET': 0 },
+    casino_roll_total: { total: -36782981, '아바': -11720740, '씨오디': -8018801, '위너': -29280, 'DR.BET': -17014160 },
+    site_total:    { total: -67556235, '아바': -51449678, '씨오디': 29782683, '위너': -634680, 'DR.BET': -45254560 },
+    balance:       { total: 6631670134, '아바': 4322863985, '씨오디': 1447880633, '위너': 266442679, 'DR.BET': 571167935 },
+    bank:          { total: 1391659029, '아바': 780115964, '씨오디': 254859774, '위너': 11618707, 'DR.BET': 345064584 },
+    manual_bonus:  { total: 0, '아바': 0, '씨오디': 0, '위너': 0, 'DR.BET': 0 },
+  }
+};
+
+// 실제 data.json 로드 시도, 실패하면 샘플 데이터 사용
+fetch(DATA_URL + '?t=' + Date.now())
+  .then(r => r.ok ? r.json() : Promise.reject('no file'))
+  .then(data => renderTable(data))
+  .catch(() => renderTable(sampleData));
+</script>
+</body>
+</html>
